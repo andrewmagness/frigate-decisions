@@ -28,12 +28,18 @@ def _env(name: str, default: str | None = None, required: bool = False) -> str |
     return value
 
 
+PROVIDER_NAMES = ("gemini", "openai", "systemone")
+DEFAULT_MODELS = {"gemini": "gemini-decision-1", "openai": "gpt-6-luna", "systemone": "jev-latest"}
+
+
 @dataclass
 class Settings:
-    gemini_api_key: str
-    gemini_base_url: str = "https://generativelanguage.googleapis.com"
+    decisions_api_key: str
+    decisions_provider: str = "gemini"
+    decisions_base_url: str | None = None  # provider default when unset
+    decisions_path: str | None = None      # provider default when unset
+    decision_model: str = ""               # provider default when empty
     gemini_auth_header: str = "x-goog-api-key"
-    decision_model: str = "gemini-decision-1"
     request_timeout: float = 60.0
 
     mqtt_host: str = "localhost"
@@ -54,6 +60,13 @@ class Settings:
     workers: int = 4
     log_level: str = "INFO"
 
+    def __post_init__(self) -> None:
+        self.decisions_provider = (self.decisions_provider or "gemini").strip().lower()
+        if self.decisions_provider not in PROVIDER_NAMES:
+            raise ConfigError(f"DECISIONS_PROVIDER must be one of {', '.join(PROVIDER_NAMES)}")
+        if not self.decision_model:
+            self.decision_model = DEFAULT_MODELS[self.decisions_provider]
+
     @classmethod
     def from_env(cls) -> "Settings":
         def as_bool(v: str | None, default: bool) -> bool:
@@ -61,11 +74,20 @@ class Settings:
                 return default
             return v.strip().lower() in {"1", "true", "yes", "on"}
 
+        provider = (_env("DECISIONS_PROVIDER") or "gemini").strip().lower()
+        api_key = _env("DECISIONS_API_KEY") or (_env("GEMINI_API_KEY") if provider == "gemini" else None)
+        if not api_key:
+            raise ConfigError("environment variable DECISIONS_API_KEY is required"
+                              + (" (or GEMINI_API_KEY)" if provider == "gemini" else ""))
+        base_url = _env("DECISIONS_BASE_URL") or (_env("GEMINI_BASE_URL") if provider == "gemini" else None)
+
         return cls(
-            gemini_api_key=_env("GEMINI_API_KEY", required=True) or "",
-            gemini_base_url=(_env("GEMINI_BASE_URL") or cls.gemini_base_url).rstrip("/"),
+            decisions_api_key=api_key,
+            decisions_provider=provider,
+            decisions_base_url=base_url.rstrip("/") if base_url else None,
+            decisions_path=_env("DECISIONS_PATH") or None,
+            decision_model=_env("DECISION_MODEL") or "",
             gemini_auth_header=_env("GEMINI_AUTH_HEADER") or cls.gemini_auth_header,
-            decision_model=_env("DECISION_MODEL") or cls.decision_model,
             request_timeout=float(_env("REQUEST_TIMEOUT") or cls.request_timeout),
             mqtt_host=_env("MQTT_HOST") or cls.mqtt_host,
             mqtt_port=int(_env("MQTT_PORT") or cls.mqtt_port),
@@ -241,3 +263,27 @@ def parse_question_config(data: dict[str, Any]) -> QuestionConfig:
 def load_question_config(path: Path) -> QuestionConfig:
     with open(path, encoding="utf-8") as fh:
         return parse_question_config(yaml.safe_load(fh) or {})
+
+
+# Per-provider request limits that differ from Gemini's (1000 questions, 255 levels,
+# any media type). Checked at startup so a bad config fails fast, not per event.
+PROVIDER_LIMITS: dict[str, dict[str, Any]] = {
+    "gemini": {"max_questions": 1000, "max_score_levels": 255, "media": MEDIA_TYPES},
+    "openai": {"max_questions": 400, "max_score_levels": 10, "media": {"snapshot", "latest", "none"}},
+    "systemone": {"max_questions": 1000, "max_score_levels": 10, "media": {"snapshot", "latest", "none"}},
+}
+
+
+def validate_for_provider(qconfig: QuestionConfig, provider: str) -> None:
+    limits = PROVIDER_LIMITS[provider]
+    for qset in qconfig.question_sets.values():
+        where = f"question_sets.{qset.name}"
+        if len(qset.questions) > limits["max_questions"]:
+            raise ConfigError(f"{where}: {provider} allows at most {limits['max_questions']} questions per request")
+        if qset.media not in limits["media"]:
+            raise ConfigError(f"{where}.media: {qset.media!r} is not supported by {provider} "
+                              f"(use one of {sorted(limits['media'])})")
+        for key, q in qset.questions.items():
+            if q["type"] == "score" and len(q["criteria"]) > limits["max_score_levels"]:
+                raise ConfigError(f"{where}.questions.{key}: {provider} allows at most "
+                                  f"{limits['max_score_levels']} score levels")

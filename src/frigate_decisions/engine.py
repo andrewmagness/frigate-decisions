@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .config import QuestionConfig, QuestionSet, ReviewRule, Schedule, Settings
-from .decisions import DecisionsClient, DecisionsError, Media, text_block
+from .decisions import DecisionsError, DecisionsProvider, Media, text_block
 from .frigate import FrigateClient
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class Engine:
         self,
         settings: Settings,
         qconfig: QuestionConfig,
-        decisions: DecisionsClient,
+        decisions: DecisionsProvider,
         frigate: FrigateClient,
         publish: Publish,
         clock: Callable[[], float] = time.time,

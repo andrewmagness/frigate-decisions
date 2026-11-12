@@ -12,8 +12,8 @@ from datetime import datetime
 
 import paho.mqtt.client as mqtt
 
-from .config import ConfigError, Settings, load_question_config
-from .decisions import DecisionsClient
+from .config import ConfigError, Settings, load_question_config, validate_for_provider
+from .decisions import make_provider
 from .engine import Engine
 from .frigate import FrigateClient
 
@@ -31,11 +31,13 @@ def main() -> int:
 
     try:
         qconfig = load_question_config(settings.questions_file)
+        validate_for_provider(qconfig, settings.decisions_provider)
     except (OSError, ConfigError) as exc:
         log.error("cannot load %s: %s", settings.questions_file, exc)
         return 2
-    log.info("loaded %d question sets, %d cameras, %d schedules", len(qconfig.question_sets),
-             len(qconfig.cameras), len(qconfig.schedules))
+    log.info("loaded %d question sets, %d cameras, %d schedules; provider %s, model %s",
+             len(qconfig.question_sets), len(qconfig.cameras), len(qconfig.schedules),
+             settings.decisions_provider, settings.decision_model)
 
     client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id)
     if settings.mqtt_username:
@@ -46,8 +48,7 @@ def main() -> int:
 
     engine = Engine(
         settings, qconfig,
-        DecisionsClient(settings.gemini_api_key, settings.gemini_base_url, settings.decision_model,
-                        settings.gemini_auth_header, settings.request_timeout),
+        make_provider(settings),
         FrigateClient(settings.frigate_url, settings.frigate_token, settings.frigate_verify_ssl),
         publish,
     )

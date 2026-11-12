@@ -1,10 +1,15 @@
 # frigate-decisions
 
-A small sidecar that asks the **Gemini Decisions API** (`gemini-decision-1`) typed questions about
-[Frigate](https://frigate.video) events. It publishes the calibrated answers to MQTT, and they show up in
-Home Assistant as sensors.
+A small sidecar that asks a **decisions API** typed questions about [Frigate](https://frigate.video) events.
+It publishes the calibrated answers to MQTT, and they show up in Home Assistant as sensors.
 
-The Decisions API sends one snapshot, clip or frame with any number of questions:
+Supported decisions APIs:
+- Google Gemini Decisions (`gemini-decision-1`, the default)
+- OpenAI Decisions (`gpt-6-luna`)
+- TypeSafe Jev
+- OpenRouter's decisions endpoint, which routes to more decision models (see [Providers](#providers))
+
+Each request sends one snapshot, clip or frame with any number of questions:
 
 - `noul`: yes/no, answered as a probability.
 - `choice`: one of N options, with a probability for each option.
@@ -40,7 +45,7 @@ lets questions such as "is this a household member?" use more than the pixels.
 ## Quick start
 
 ```bash
-cp .env.example .env                       # add your Gemini key, MQTT and Frigate URL
+cp .env.example .env                       # choose a provider, add its API key, MQTT and Frigate URL
 mkdir -p config && cp questions.example.yaml config/questions.yaml
 cp docker-compose.example.yml docker-compose.yml   # set the image owner, or use build: .
 docker compose up -d
@@ -77,13 +82,40 @@ The result arrives on `frigate/decisions/events` with the same `request_id`.
 
 If a run fails, the message has `error` instead of `answers`.
 
+## Providers
+
+Set `DECISIONS_PROVIDER` and `DECISIONS_API_KEY`. Question sets are written once, in the format below, and translated
+for each provider. Answers come back in the same normalized form, so sensors and automations don't change when you
+switch providers.
+
+| `DECISIONS_PROVIDER` | Service | Default model | Media | Limits checked at startup |
+|---|---|---|---|---|
+| `gemini` (default) | Google Gemini Decisions, `POST /v1beta/decisions` | `gemini-decision-1` | image, video clip, audio, PDF | 1,000 questions; 255 score levels |
+| `openai` | OpenAI Decisions, `POST /v1/decisions` | `gpt-6-luna` | images | 400 questions; 10 score levels |
+| `systemone` | TypeSafe Jev, `POST /v1/systemone`, and compatible gateways | `jev-latest` | images (model-dependent) | 10 score levels |
+
+For OpenRouter, which routes to several decision models (Jev, Upstage Solar Decide and others), use:
+
+```env
+DECISIONS_PROVIDER=systemone
+DECISIONS_API_KEY=<openrouter key>
+DECISIONS_BASE_URL=https://openrouter.ai/api
+DECISIONS_PATH=/alpha/decisions
+DECISION_MODEL=typesafe/jev-1.14
+```
+
+Notes:
+- **Re-tune thresholds when you switch providers.** Calibration differs between models, and a `0.8` from one doesn't mean the same as a `0.8` from another.
+- Only the `gemini` provider has been run against the live API so far. The `openai` and `systemone` adapters are tested against the documented request and response formats. If you use them, issue reports and fixes are welcome.
+- Anthropic has no native decisions API. This project does not fake one by prompting a chat model, because those probabilities wouldn't be calibrated.
+
 ## Configuration
 
 Environment variables are listed in [`.env.example`](.env.example). Question sets, camera rules and schedules go in
 [`questions.example.yaml`](questions.example.yaml). Home Assistant automation examples are in [`ha/`](ha).
 
 Tips:
-- Use a key from a **dedicated Google Cloud project**. Decisions rate limits apply per project, not per key.
+- Use a dedicated project or key for this service. With Gemini, rate limits apply per Google Cloud project, not per key.
 - Always give `choice` questions a catch-all option, because the probabilities must sum to 1 even when nothing fits.
 - Tune thresholds on your own footage. The API has no feedback endpoint, so calibration lives in your automations.
 - Safety-related questions, such as a child near a pool, are an **extra signal only**. Never use them as a substitute for

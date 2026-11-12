@@ -60,7 +60,7 @@ class FakeFrigate:
 def env():
     published = []
     clock = [1000.0]
-    eng = Engine(Settings(gemini_api_key="x"), example_config(), FakeDecisions(), FakeFrigate(),
+    eng = Engine(Settings(decisions_api_key="x"), example_config(), FakeDecisions(), FakeFrigate(),
                  lambda t, p, r: published.append((t, json.loads(p) if p.startswith("{") else p, r)),
                  clock=lambda: clock[0])
     return eng, published, clock
