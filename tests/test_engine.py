@@ -37,6 +37,10 @@ class FakeDecisions:
 class FakeFrigate:
     def __init__(self):
         self.calls = []
+        self.labels = {}
+
+    def event_label(self, eid):
+        return self.labels.get(eid)
 
     def _m(self, what):
         self.calls.append(what)
@@ -67,8 +71,9 @@ def env():
 
 
 def review(rtype="new", camera="front_door", objects=("person",), rid="r1", severity="alert", **data):
+    data.setdefault("detections", ["e1"])
     return {"type": rtype, "after": {"id": rid, "camera": camera, "severity": severity,
-                                     "data": {"detections": ["e1"], "objects": list(objects), "zones": ["porch"],
+                                     "data": {"objects": list(objects), "zones": ["porch"],
                                               "sub_labels": [], **data}}}
 
 
@@ -213,3 +218,23 @@ def test_client_raises_on_400():
     with pytest.raises(DecisionsError) as exc:
         client.decide([{"type": "text", "text": "x"}], {"q": {"type": "noul", "instructions": "?"}})
     assert exc.value.code == "safety" and exc.value.status == 400
+
+
+def test_person_added_in_update_runs_once_on_matching_event(env):
+    """Frigate opens the review for a dog; the person arrives in a later update."""
+    eng, _, _ = env
+    eng.frigate.labels = {"dog1": "dog", "p1": "person", "dog2": "dog-verified"}
+    assert eng.handle_review(review("new", objects=("dog",), rid="rv", detections=["dog1"])) == []
+    res = eng.handle_review(review("update", objects=("dog-verified", "person"), rid="rv",
+                                   detections=["dog1", "p1", "dog2"]))
+    assert len(res) == 1
+    assert eng.frigate.calls == [("snapshot", "p1")]      # the person, not the dog
+    assert eng.handle_review(review("update", objects=("dog", "person"), rid="rv",
+                                    detections=["dog1", "p1", "dog2"])) == []   # once per review
+    assert eng.handle_review(review("end", objects=("dog", "person"), rid="rv")) == []  # no end rule
+
+
+def test_new_and_update_count_as_one_start(env):
+    eng, _, _ = env
+    assert len(eng.handle_review(review("new", rid="x"))) == 1
+    assert eng.handle_review(review("update", rid="x")) == []

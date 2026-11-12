@@ -49,6 +49,15 @@ class FrigateClient:
                 time.sleep(wait)
         raise RuntimeError(f"could not fetch media: {last}")
 
+    def event_label(self, event_id: str) -> str | None:
+        try:
+            resp = self._frigate.get(f"{self.base_url}/api/events/{event_id}")
+            if resp.status_code == 200:
+                return resp.json().get("label")
+        except (httpx.HTTPError, ValueError) as exc:
+            log.debug("could not read label of event %s: %s", event_id, exc)
+        return None
+
     def event_snapshot(self, event_id: str) -> Media:
         # The snapshot may lag a moment behind a brand-new review; retry briefly.
         return self._get(self._frigate, f"{self.base_url}/api/events/{event_id}/snapshot.jpg?bbox=0",

@@ -144,8 +144,23 @@ class Engine:
             return True
 
     @staticmethod
-    def _rule_matches(rule: ReviewRule, rtype: str, severity: str, labels: list[str], zones: list[str]) -> bool:
-        if rtype not in rule.review_types or severity not in rule.severity:
+    def _type_eligible(rule: ReviewRule, rtype: str) -> bool:
+        # A "new" rule means "as soon as this review matches". Frigate often opens a
+        # review for one object (e.g. a dog) and adds the person, a zone, or the alert
+        # severity in a later "update", so updates are eligible too (once per review).
+        return rtype in rule.review_types or (rtype == "update" and "new" in rule.review_types)
+
+    @staticmethod
+    def _dedupe_key(rule: ReviewRule, review_id: Any, rtype: str) -> tuple | None:
+        if rtype in {"new", "update"}:
+            if "update" in rule.review_types:
+                return None  # explicit update rules run on every update (use cooldown_seconds)
+            return (review_id, rule.set, "start")
+        return (review_id, rule.set, rtype)
+
+    @classmethod
+    def _rule_matches(cls, rule: ReviewRule, rtype: str, severity: str, labels: list[str], zones: list[str]) -> bool:
+        if not cls._type_eligible(rule, rtype) or severity not in rule.severity:
             return False
         if rule.labels and not set(rule.labels) & set(labels):
             return False
@@ -167,8 +182,11 @@ class Engine:
         results = []
         for rule in self.q.cameras[camera]:
             if not self._rule_matches(rule, rtype, severity, labels, zones):
+                log.debug("review %s %s on %s (%s, %s) does not match %s", review_id, rtype, camera,
+                          severity, labels, rule.set)
                 continue
-            if rtype != "update" and self._dedupe((review_id, rule.set, rtype)):
+            key = self._dedupe_key(rule, review_id, rtype)
+            if key is not None and self._dedupe(key):
                 continue
             if not self._cooled_down(camera, rule.set, rule.cooldown_seconds):
                 log.debug("cooldown: skipping %s/%s", camera, rule.set)
@@ -193,10 +211,22 @@ class Engine:
                     extra={"review_id": review_id, "review_type": rtype, "severity": severity,
                            "labels": labels, "sub_labels": data.get("sub_labels") or [], "zones": zones,
                            "detections": detections},
-                    event_id=detections[0] if detections else None,
+                    event_id=self._pick_event(detections, rule.labels),
                 )
             )
         return results
+
+    def _pick_event(self, detections: list[str], wanted: list[str] | None) -> str | None:
+        """Choose the detection whose snapshot to analyse: the most recent one with a
+        label the rule asked for (so a person rule doesn't judge the dog), else the first."""
+        if not detections:
+            return None
+        if wanted and len(detections) > 1:
+            for event_id in reversed(detections):
+                label = self.frigate.event_label(event_id)
+                if label and label.split("-")[0] in wanted:
+                    return event_id
+        return detections[0]
 
     # ---------------------------------------------------------------- requests
     def handle_request(self, msg: dict[str, Any]) -> dict[str, Any]:
