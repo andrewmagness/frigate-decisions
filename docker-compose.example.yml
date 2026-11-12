@@ -1,0 +1,11 @@
+# Copy to docker-compose.yml, create .env from .env.example and
+# config/questions.yaml from questions.example.yaml.
+services:
+  frigate-decisions:
+    image: ghcr.io/OWNER/frigate-decisions:latest
+    # build: .
+    container_name: frigate-decisions
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config:/config:ro

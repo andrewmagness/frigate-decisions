@@ -1,0 +1,39 @@
+# Example: on-demand bins check from Home Assistant using the request topic.
+# HA saves a full-resolution snapshot under /config/www (served at /local),
+# asks the sidecar to judge that exact image, and waits for the answer.
+alias: Frigate Decisions - bins check (request)
+mode: single
+triggers:
+  - trigger: time
+    at: "21:00:00"
+    weekday: [mon]
+actions:
+  - action: camera.snapshot
+    target:
+      entity_id: camera.YOUR_GARAGE_CAMERA
+    data:
+      filename: /config/www/snapshots/bins_check.jpg
+  - variables:
+      rid: "bins-{{ now().timestamp() | int }}"
+  - action: mqtt.publish
+    data:
+      topic: frigate/decisions/request
+      payload: >-
+        {{ {"request_id": rid, "set": "bins", "camera": "garage",
+            "image_url": "http://YOUR_HA_HOST:8123/local/snapshots/bins_check.jpg"} | to_json }}
+  - wait_for_trigger:
+      - trigger: mqtt
+        topic: frigate/decisions/events
+        value_template: "{{ value_json.request_id }}"
+        payload: "{{ rid }}"
+    timeout: "00:01:00"
+  - variables:
+      a: "{{ wait.trigger.payload_json.answers if wait.trigger else {} }}"
+  - if: "{{ a and a.bins_at_curb.value | float(1) < 0.5 and a.bins_at_curb.confidence | float(0) > 0.7 }}"
+    then:
+      - action: notify.mobile_app_YOUR_PHONE
+        data:
+          title: "🗑️ Bins not at the curb"
+          message: "{{ a.bins_visible_near_house.value }} still near the house"
+          data:
+            image: /local/snapshots/bins_check.jpg

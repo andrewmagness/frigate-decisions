@@ -1,0 +1,23 @@
+# Example: child near the pool with no adult present.
+# This is an EXTRA layer only — never a substitute for a pool gate alarm,
+# fencing, or supervision. Calibrated probabilities can still miss.
+alias: Frigate Decisions - pool safety
+mode: single
+triggers:
+  - trigger: mqtt
+    topic: frigate/decisions/events
+conditions:
+  - condition: template
+    value_template: >-
+      {% set a = trigger.payload_json.answers | default({}) %}
+      {{ trigger.payload_json.set == 'pool_safety'
+         and a.child_near_pool.value | float(0) > 0.6
+         and a.adult_present.value | float(1) < 0.4 }}
+actions:
+  - action: notify.notify            # replace with every phone / speaker you want
+    data:
+      title: "🚨 Child near pool, no adult seen"
+      message: "Check the pool now."
+      data:
+        push:
+          interruption-level: critical

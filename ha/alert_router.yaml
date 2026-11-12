@@ -1,0 +1,40 @@
+# Example: route alerts by the calibrated "concern" score from the "arrival" set.
+# Replace notify.mobile_app_YOUR_PHONE with your own notify service.
+alias: Frigate Decisions - alert router
+mode: parallel
+max: 10
+triggers:
+  - trigger: mqtt
+    topic: frigate/decisions/events
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.payload_json.source == 'review'
+         and trigger.payload_json.set == 'arrival'
+         and trigger.payload_json.answers is defined }}
+actions:
+  - variables:
+      a: "{{ trigger.payload_json.answers }}"
+      cam: "{{ trigger.payload_json.camera }}"
+      concern: "{{ a.concern.value | float(0) }}"   # 0 (lowest level) .. 4 (highest)
+      real: "{{ a.real_person.value | float(0) }}"
+      who: "{{ a.who.value }}"
+  - choose:
+      - alias: Critical (trying doors / looking in windows)
+        conditions: "{{ real > 0.8 and concern >= 3.5 and a.concern.confidence | float(0) > 0.6 }}"
+        sequence:
+          - action: notify.mobile_app_YOUR_PHONE
+            data:
+              title: "⚠️ {{ cam | replace('_',' ') | title }}"
+              message: "Concern {{ concern | round(1) }} ({{ who }})"
+              data:
+                push:
+                  interruption-level: critical
+      - alias: Normal (lingering unknown person)
+        conditions: "{{ real > 0.8 and concern >= 2.5 and who != 'resident' }}"
+        sequence:
+          - action: notify.mobile_app_YOUR_PHONE
+            data:
+              title: "{{ cam | replace('_',' ') | title }}"
+              message: "{{ who | title }} — concern {{ concern | round(1) }}"
+    # concern < 2.5 or a resident: no notification

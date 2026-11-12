@@ -1,0 +1,129 @@
+# Copy to questions.yaml and adapt to your cameras.
+#
+# question_sets: reusable bundles of Decisions API questions.
+#   context:   text sent before the media. Placeholders: {camera} {camera_name}
+#              {labels} {sub_labels} {zones} {severity} {review_type} {time}
+#              {genai_title} {genai_scene} (genai reviews), plus any keys a
+#              request's "context" mapping supplies.
+#   media:     snapshot (event's best frame) | clip (event mp4, end/genai only)
+#              | latest (camera's current frame) | none (context text only)
+#   resolution: low | medium | high | ultra_high (optional)
+#   questions: key -> {type: noul|choice|score, instructions, criteria?}
+#
+# All questions in a set are answered in a single pass, so adding questions
+# barely changes latency. Choice keys are sorted by the API; avoid positional
+# keys like "none_of_the_above" and always include a catch-all option.
+
+question_sets:
+  arrival:
+    media: snapshot
+    resolution: medium
+    context: |
+      Home security camera "{camera_name}" at {time}.
+      Frigate detected: {labels}. Recognised faces/plates: {sub_labels}. Zones: {zones}.
+      A recognised name means a known household member or regular visitor.
+    questions:
+      real_person:
+        type: noul
+        instructions: Is there a real human visible (not a shadow, reflection, poster, or statue)?
+      who:
+        type: choice
+        instructions: Who is the most prominent person most likely to be?
+        criteria:
+          resident: A recognised household member (see recognised names above).
+          delivery: A courier or delivery driver, often in uniform or carrying a parcel.
+          service: A utility, maintenance, or yard worker.
+          solicitor: A salesperson, canvasser, or someone handing out flyers.
+          visitor: A guest approaching the door in an ordinary way.
+          unknown: Anyone else, or no person visible.
+      concern:
+        type: score
+        instructions: How concerning is this scene for the security of the home?
+        criteria:
+          - Household members, pets, or nothing notable.
+          - Someone passing by on the street or sidewalk.
+          - Expected activity such as a delivery or a visitor at the door.
+          - An unknown person lingering or approaching an entry point without obvious purpose.
+          - Someone trying door handles, looking into windows, or tampering with property.
+      carrying_package:
+        type: noul
+        instructions: Is a person carrying or placing a parcel or package?
+
+  pool_safety:
+    media: snapshot
+    resolution: high
+    context: |
+      Camera "{camera_name}" overlooks a swimming pool, at {time}. Detected: {labels}.
+    questions:
+      child_near_pool:
+        type: noul
+        instructions: Is a child (roughly under 12) in or within a few steps of the pool?
+      adult_present:
+        type: noul
+        instructions: Is an adult visibly present and close enough to supervise the pool area?
+
+  camera_health:
+    media: latest
+    resolution: low
+    context: Routine health check of security camera "{camera_name}" at {time}.
+    questions:
+      image_state:
+        type: choice
+        instructions: What is the state of this camera image?
+        criteria:
+          ok: Clear, usable image of the scene.
+          blurry: Out of focus or smeared, e.g. condensation or dirt on the lens.
+          blocked: View largely obstructed by an object.
+          web: A spider web or insect is on or near the lens.
+          ir_stuck: Black-and-white night vision although the scene is clearly daylight.
+          misaimed: Pointed at the sky, ground, or a wall instead of a useful scene.
+          dark: Image is almost entirely black.
+
+  bins:
+    media: latest
+    resolution: high
+    context: Camera "{camera_name}" at {time}, checking whether trash bins were taken to the curb.
+    questions:
+      bins_at_curb:
+        type: noul
+        instructions: Are the trash/recycling bins at the curb or street edge, ready for collection?
+      bins_visible_near_house:
+        type: choice
+        instructions: How many trash or recycling bins are still near the house/garage (not at the curb)?
+        criteria:
+          n0: None.
+          n1: One.
+          n2: Two.
+          n3plus: Three or more.
+
+cameras:
+  front_door:
+    on_review:
+      - set: arrival
+        review_types: [new]
+        labels: [person]
+  driveway:
+    on_review:
+      - set: arrival
+        review_types: [new]
+        labels: [person, car]
+        cooldown_seconds: 30
+  pool:
+    on_review:
+      - set: pool_safety
+        review_types: [new]
+        labels: [person]
+  garage: {}   # listed so schedules with cameras: all include it
+
+schedules:
+  - name: morning_camera_health
+    at: "07:00"
+    set: camera_health
+    cameras: all
+  # Bins can also be checked on demand from Home Assistant via the request topic
+  # (see ha/trash_check_request.yaml), e.g. with a full-resolution image URL.
+  - name: bins_check
+    at: "21:00"
+    days: [mon]
+    set: bins
+    cameras: [garage]

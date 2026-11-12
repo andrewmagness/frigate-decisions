@@ -1,0 +1,19 @@
+# Local/private configuration — never commit
+.env
+.env.*
+!.env.example
+questions.yaml
+docker-compose.yml
+compose.yml
+deploy/
+logs/
+*.csv
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
