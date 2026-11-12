@@ -15,6 +15,7 @@ from typing import Any, Callable
 from .config import QuestionConfig, QuestionSet, ReviewRule, Schedule, Settings
 from .decisions import DecisionsError, DecisionsProvider, Media, text_block
 from .frigate import FrigateClient
+from .store import Recorder
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class Engine:
         frigate: FrigateClient,
         publish: Publish,
         clock: Callable[[], float] = time.time,
+        recorder: Recorder | None = None,
     ):
         self.s = settings
         self.q = qconfig
@@ -63,6 +65,7 @@ class Engine:
         self.frigate = frigate
         self.publish = publish
         self.clock = clock
+        self.recorder = recorder
         self._lock = threading.Lock()
         self._seen: OrderedDict[tuple, float] = OrderedDict()
         self._last_run: dict[tuple[str, str], float] = {}
@@ -87,6 +90,24 @@ class Engine:
     @property
     def reviews_topic(self) -> str:
         return f"{self.s.frigate_topic_prefix}/reviews"
+
+    @property
+    def feedback_topic(self) -> str:
+        return f"{self.s.topic_prefix}/feedback"
+
+    # ---------------------------------------------------------------- feedback
+    def handle_feedback(self, msg: dict[str, Any]) -> dict[str, Any] | None:
+        """Record a 👍/👎 vote: {"id": <event id>, "vote": "up"|"down", ...}."""
+        event_id, vote = msg.get("id"), msg.get("vote")
+        if not event_id or vote not in {"up", "down"}:
+            log.warning("ignoring malformed feedback: %s", msg)
+            return None
+        if self.recorder is None:
+            log.info("feedback %s for %s received but DATA_DIR is not set; not stored", vote, event_id)
+            return None
+        record = self.recorder.feedback(str(event_id), vote, user=msg.get("user"), source=msg.get("source"))
+        log.info("feedback %s for event %s", vote, event_id)
+        return record
 
     # --------------------------------------------------------------- discovery
     def discovery_messages(self) -> list[tuple[str, str]]:
@@ -282,7 +303,8 @@ class Engine:
                 image_url: str | None = None) -> dict[str, Any]:
         qset = self.q.question_sets[set_name]
         values = {"time": datetime.now().strftime("%A %H:%M"), **values}
-        result: dict[str, Any] = {"source": source, "camera": camera, "set": set_name, **(extra or {})}
+        result: dict[str, Any] = {"id": uuid.uuid4().hex[:12], "source": source, "camera": camera,
+                                  "set": set_name, **(extra or {})}
         started = time.monotonic()
         try:
             media = self._media_for(qset, camera, event_id, image_url)
@@ -306,9 +328,14 @@ class Engine:
 
         for key, ans in (result.get("answers") or {}).items():
             state = {**ans, "set": set_name, "source": source, "ts": result["ts"],
-                     "review_id": result.get("review_id")}
+                     "review_id": result.get("review_id"), "event_id": result["id"]}
             self.publish(self.state_topic(camera, key), json.dumps(state), True)
         self.publish(self.events_topic, json.dumps(result), False)
+        if self.recorder is not None:
+            try:
+                self.recorder.event(result)
+            except OSError as exc:
+                log.error("could not record event: %s", exc)
         if "answers" in result:
             log.info("%s/%s (%s) in %dms: %s", camera, set_name, source, result["elapsed_ms"],
                      {k: v.get("value") for k, v in result["answers"].items()})

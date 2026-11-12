@@ -109,6 +109,30 @@ Notes:
 - Only the `gemini` provider has been run against the live API so far. The `openai` and `systemone` adapters are tested against the documented request and response formats. If you use them, issue reports and fixes are welcome.
 - Anthropic has no native decisions API. This project does not fake one by prompting a chat model, because those probabilities wouldn't be calibrated.
 
+## Feedback and tuning thresholds
+
+Set `DATA_DIR` (and mount it as a volume) to record:
+- every decision to `events.jsonl`, using the same JSON as `frigate/decisions/events`, including its `id`;
+- every vote to `feedback.jsonl`.
+
+Votes arrive on `frigate/decisions/feedback`:
+
+```json
+{"id": "<event id>", "vote": "up" | "down", "user": "optional", "source": "optional"}
+```
+
+[`ha/feedback_buttons.yaml`](ha/feedback_buttons.yaml) wires 👍/👎 buttons on Telegram notifications to that topic.
+The last vote for an event wins, so people can change their mind. Then run:
+
+```bash
+docker exec frigate-decisions frigate-decisions-report --since 2026-11-01
+```
+
+For each camera and question set, the report shows:
+- the number of 👍, 👎 and unrated runs;
+- how each answer differs between 👍 and 👎 runs: mean, minimum and maximum for yes/no and score questions, counts for choice questions;
+- every 👎 run in full, so you can pick thresholds from your own footage.
+
 ## Configuration
 
 Environment variables are listed in [`.env.example`](.env.example). Question sets, camera rules and schedules go in
@@ -117,7 +141,7 @@ Environment variables are listed in [`.env.example`](.env.example). Question set
 Tips:
 - Use a dedicated project or key for this service. With Gemini, rate limits apply per Google Cloud project, not per key.
 - Always give `choice` questions a catch-all option, because the probabilities must sum to 1 even when nothing fits.
-- Tune thresholds on your own footage. The API has no feedback endpoint, so calibration lives in your automations.
+- Tune thresholds on your own footage. The decisions APIs have no feedback endpoint, so use the feedback log (above) and set thresholds in your automations.
 - Safety-related questions, such as a child near a pool, are an **extra signal only**. Never use them as a substitute for
   physical safety measures.
 

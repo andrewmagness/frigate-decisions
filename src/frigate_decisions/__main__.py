@@ -16,6 +16,7 @@ from .config import ConfigError, Settings, load_question_config, validate_for_pr
 from .decisions import make_provider
 from .engine import Engine
 from .frigate import FrigateClient
+from .store import Recorder
 
 log = logging.getLogger("frigate_decisions")
 
@@ -39,6 +40,15 @@ def main() -> int:
              len(qconfig.question_sets), len(qconfig.cameras), len(qconfig.schedules),
              settings.decisions_provider, settings.decision_model)
 
+    recorder = None
+    if settings.data_dir:
+        try:
+            recorder = Recorder(settings.data_dir)
+            log.info("recording events and feedback to %s", settings.data_dir)
+        except OSError as exc:
+            log.error("cannot use DATA_DIR %s: %s", settings.data_dir, exc)
+            return 2
+
     client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id)
     if settings.mqtt_username:
         client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
@@ -51,6 +61,7 @@ def main() -> int:
         make_provider(settings),
         FrigateClient(settings.frigate_url, settings.frigate_token, settings.frigate_verify_ssl),
         publish,
+        recorder=recorder,
     )
     pool = ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="decide")
     ha_status_topic = f"{settings.discovery_prefix}/status"
@@ -65,7 +76,8 @@ def main() -> int:
             log.error("MQTT connect failed: %s", reason_code)
             return
         log.info("MQTT connected to %s:%s", settings.mqtt_host, settings.mqtt_port)
-        c.subscribe([(engine.reviews_topic, 1), (engine.request_topic, 1), (ha_status_topic, 1)])
+        c.subscribe([(engine.reviews_topic, 1), (engine.request_topic, 1), (engine.feedback_topic, 1),
+                     (ha_status_topic, 1)])
         c.publish(engine.availability_topic, "online", qos=1, retain=True)
         send_discovery()
 
@@ -89,6 +101,8 @@ def main() -> int:
             pool.submit(guarded, engine.handle_review, payload)
         elif msg.topic == engine.request_topic:
             pool.submit(guarded, engine.handle_request, payload)
+        elif msg.topic == engine.feedback_topic:
+            pool.submit(guarded, engine.handle_feedback, payload)
 
     client.on_connect = on_connect
     client.on_message = on_message

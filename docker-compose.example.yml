@@ -2,10 +2,13 @@
 # config/questions.yaml from questions.example.yaml.
 services:
   frigate-decisions:
-    image: ghcr.io/OWNER/frigate-decisions:latest
+    image: ghcr.io/andrewmagness/frigate-decisions:latest
     # build: .
     container_name: frigate-decisions
     restart: unless-stopped
     env_file: .env
+    environment:
+      DATA_DIR: /data          # optional: event + feedback log for frigate-decisions-report
     volumes:
       - ./config:/config:ro
+      - ./data:/data           # must be writable by uid 10001 (e.g. chmod 777 data)

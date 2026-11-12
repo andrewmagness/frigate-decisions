@@ -1,0 +1,42 @@
+# Example: 👍/👎 buttons on Telegram messages, stored by frigate-decisions as feedback.
+#
+# 1) In the automation that sends each decision to Telegram, add an inline keyboard
+#    carrying the event id (frigate/decisions/events payload field "id"):
+#
+#      - action: telegram_bot.send_photo
+#        data:
+#          ...
+#          inline_keyboard:
+#            - "👍:/fd_up {{ trigger.payload_json.id }}, 👎:/fd_down {{ trigger.payload_json.id }}"
+#
+# 2) This automation turns a button press into a feedback message and marks the vote.
+alias: Frigate Decisions - feedback buttons
+mode: queued
+triggers:
+  - trigger: event
+    event_type: telegram_callback
+conditions:
+  - condition: template
+    value_template: "{{ trigger.event.data.data is match('/fd_(up|down) ') }}"
+actions:
+  - variables:
+      vote: "{{ 'up' if trigger.event.data.data.startswith('/fd_up') else 'down' }}"
+      event_id: "{{ trigger.event.data.data.split(' ')[1] }}"
+  - action: mqtt.publish
+    data:
+      topic: frigate/decisions/feedback
+      payload: >-
+        {{ {"id": event_id, "vote": vote, "user": trigger.event.data.user_id | string,
+            "source": "telegram"} | to_json }}
+  - action: telegram_bot.answer_callback_query
+    data:
+      callback_query_id: "{{ trigger.event.data.id }}"
+      message: "{{ 'Saved 👍' if vote == 'up' else 'Saved 👎' }}"
+  - action: telegram_bot.edit_replymarkup
+    data:
+      chat_id: "{{ trigger.event.data.chat_id }}"
+      message_id: "{{ trigger.event.data.message.message_id }}"
+      inline_keyboard:
+        - >-
+          {{ '✅ 👍' if vote == 'up' else '👍' }}:/fd_up {{ event_id }},
+          {{ '✅ 👎' if vote == 'down' else '👎' }}:/fd_down {{ event_id }}

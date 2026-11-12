@@ -57,6 +57,7 @@ class Settings:
     frigate_verify_ssl: bool = True
 
     questions_file: Path = Path("/config/questions.yaml")
+    data_dir: Path | None = None  # enables events/feedback JSONL logging
     workers: int = 4
     log_level: str = "INFO"
 
@@ -102,6 +103,7 @@ class Settings:
             frigate_token=_env("FRIGATE_TOKEN") or None,
             frigate_verify_ssl=as_bool(_env("FRIGATE_VERIFY_SSL"), True),
             questions_file=Path(_env("QUESTIONS_FILE") or str(cls.questions_file)),
+            data_dir=Path(_env("DATA_DIR")) if _env("DATA_DIR") else None,
             workers=int(_env("WORKERS") or cls.workers),
             log_level=(_env("LOG_LEVEL") or cls.log_level).upper(),
         )
